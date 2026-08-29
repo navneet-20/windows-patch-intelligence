@@ -164,6 +164,8 @@
     <span class="tb-sub">patchtuesday.webline.cloud</span>
   </div>
   <div class="tb-right">
+    <a href="https://msrc.microsoft.com/update-guide" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.73rem;text-decoration:none;border:1px solid var(--border2);border-radius:4px;padding:0.18rem 0.5rem">🛡️ MSRC</a>
+    <a href="https://catalog.update.microsoft.com" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.73rem;text-decoration:none;border:1px solid var(--border2);border-radius:4px;padding:0.18rem 0.5rem">📦 Catalog</a>
     <span class="live-dot"></span>
     <span id="topMeta">AI-monitored · Updated automatically</span>
   </div>
@@ -280,17 +282,13 @@ function artCard(a){
   </div>`;
 }
 
-function renderTimeline(meta,patches){
-  const keys=[...new Set(patches.map(p=>`${p.Year}|||${p.Month}`))].sort((a,b)=>{
-    const[ay,am]=a.split("|||"),[by,bm]=b.split("|||");
-    return Number(by)-Number(ay)||mNum(bm)-mNum(am);
-  }).slice(0,6);
-  return keys.map(k=>{
-    const[year,month]=k.split("|||");
-    const isCur=month===meta.current_patch_month&&String(year)===String(meta.current_patch_year);
-    const mp=patches.filter(p=>p.Month===month&&String(p.Year)===year);
-    return `<div class="tl-item"><div class="tl-dot ${isCur?"dot-cur":"dot-old"}">${isCur?"●":"○"}</div><div><div class="tl-m">${month} ${year} ${isCur?'<span class="tl-tag">CURRENT</span>':""}</div><div class="tl-d">${mp[0]?.Patch_Date||""} · ${mp.length} update${mp.length>1?"s":""}</div></div></div>`;
-  }).join("")+`<div class="tl-item"><div class="tl-dot dot-nxt">→</div><div><div class="tl-m">${meta.next_patch_month} ${meta.next_patch_year} <span class="tl-tag" style="color:var(--warn)">NEXT</span></div><div class="tl-d">${meta.next_patch_day} · ${meta.next_patch_date} · ${meta.days_until_next} days</div></div></div>`;
+function renderTimeline(meta,patches,daysUntil){
+  const curM=meta.current_patch_month,curY=String(meta.current_patch_year);
+  const curItem=`<div class="tl-item"><div class="tl-dot dot-cur">●</div><div><div class="tl-m">${curM} ${curY} <span class="tl-tag">CURRENT</span></div><div class="tl-d">${meta.current_patch_date} · Patch Tuesday</div></div></div>`;
+  const nxtItem=`<div class="tl-item"><div class="tl-dot dot-nxt">→</div><div><div class="tl-m">${meta.next_patch_month} ${meta.next_patch_year} <span class="tl-tag" style="color:var(--warn)">UPCOMING</span></div><div class="tl-d">${meta.next_patch_date} · ${daysUntil} days away</div></div></div>`;
+  const keys=[...new Set(patches.filter(p=>!(p.Month===curM&&String(p.Year)===curY)).map(p=>`${p.Year}|||${p.Month}`))].sort((a,b)=>{const[ay,am]=a.split("|||"),[by,bm]=b.split("|||");return Number(by)-Number(ay)||mNum(bm)-mNum(am);}).slice(0,4);
+  const past=keys.map(k=>{const[year,month]=k.split("|||");const mp=patches.filter(p=>p.Month===month&&String(p.Year)===year);return `<div class="tl-item"><div class="tl-dot dot-old">○</div><div><div class="tl-m">${month} ${year}</div><div class="tl-d">${mp[0]?.Patch_Date||""} · ${mp.length} update${mp.length>1?"s":""}</div></div></div>`;}).join("");
+  return curItem+nxtItem+past;
 }
 
 function renderFocus(articles){
@@ -306,13 +304,19 @@ async function init(){
     const[meta,patches,articles]=await Promise.all([load("meta.json","json"),load("patches.csv","csv"),load("articles.csv","csv")]);
     const curM=meta.current_patch_month,curY=String(meta.current_patch_year);
 
-    // Hero
+    // Live date calculations from today
+    const today=new Date();today.setHours(0,0,0,0);
+    const patchDate=new Date(meta.current_patch_date);
+    const nextDate=new Date(meta.next_patch_date);
+    const daysSince=Math.floor((today-patchDate)/(1000*60*60*24));
+    const daysUntil=Math.max(0,Math.ceil((nextDate-today)/(1000*60*60*24)));
+
     document.getElementById("heroTitle").innerHTML=`<em>${curM} ${curY}</em> Patch Tuesday`;
     document.getElementById("heroDate").innerHTML=`<strong>${meta.current_patch_day}, ${curM} ${meta.current_patch_date?.split("-")[2]}, ${curY}</strong> · Windows 11 cumulative updates`;
-    document.getElementById("daysSince").textContent=meta.days_since_patch??"—";
+    document.getElementById("daysSince").textContent=daysSince;
     document.getElementById("daysSinceSub").textContent=`Since ${curM} ${curY} patch`;
-    document.getElementById("daysUntil").textContent=meta.days_until_next??"—";
-    document.getElementById("daysUntilSub").textContent=`${meta.next_patch_day}, ${meta.next_patch_month} ${meta.next_patch_date?.split("-")[2]}`;
+    document.getElementById("daysUntil").textContent=daysUntil;
+    document.getElementById("daysUntilSub").textContent=`${meta.next_patch_day}, ${meta.next_patch_month} ${meta.next_patch_date?.split("-")[2]}, ${meta.next_patch_year}`;
     document.getElementById("topMeta").textContent=`${patches.length} patches tracked · Last updated ${meta.last_updated}`;
 
     const curP=patches.filter(p=>p.Month===curM&&String(p.Year)===curY);
@@ -320,11 +324,10 @@ async function init(){
 
     const curA=articles.filter(a=>a.Is_Current_Month==="TRUE"||a.Is_Current_Month===true);
     const oldA=articles.filter(a=>a.Is_Current_Month!=="TRUE"&&a.Is_Current_Month!==true);
-    const totalCVEs=curP.reduce((s,p)=>s+(parseInt(p.CVE_Count)||0),0);
+    const maxCVEs=curP.length>0?Math.max(...curP.map(p=>parseInt(p.CVE_Count)||0)):0;
     const critN=curP.filter(p=>p.Severity==="Critical").length;
     const focus=renderFocus(curA);
 
-    // Past patches grouped
     const groups={};
     patches.filter(p=>!(p.Month===curM&&String(p.Year)===curY)).forEach(p=>{
       const k=`${p.Year}|||${p.Month}`;
@@ -346,13 +349,13 @@ async function init(){
       <div class="sb">
         <div class="sb-t">📊 This Month's Stats</div>
         <div class="sg">
-          <div class="sb-stat"><div class="sb-sn">${totalCVEs||"—"}</div><div class="sb-sl">CVEs Patched</div></div>
+          <div class="sb-stat"><div class="sb-sn">${maxCVEs||"—"}</div><div class="sb-sl">CVEs Patched</div></div>
           <div class="sb-stat"><div class="sb-sn">${critN||"—"}</div><div class="sb-sl">Critical Severity</div></div>
           <div class="sb-stat"><div class="sb-sn">${curP.length}</div><div class="sb-sl">Updates Released</div></div>
           <div class="sb-stat"><div class="sb-sn">${curA.length}</div><div class="sb-sl">News Articles</div></div>
         </div>
       </div>
-      <div class="sb"><div class="sb-t">📅 Patch Timeline</div>${renderTimeline(meta,patches)}</div>
+      <div class="sb"><div class="sb-t">📅 Patch Timeline</div>${renderTimeline(meta,patches,daysUntil)}</div>
       ${focus.length?`<div class="sb"><div class="sb-t">🎯 Windows Focus Areas</div><p style="font-size:0.73rem;color:var(--muted);margin-bottom:0.75rem">Areas Microsoft addressed this patch cycle</p>${focus.map(f=>`<div class="fr"><span class="fi">${f.icon}</span><span class="fn">${f.label}</span><div class="fb"><div class="fbf" style="width:${f.pct}%"></div></div></div>`).join("")}</div>`:""}
       <div class="sb">
         <div class="sb-t">🔗 Quick Links</div>
